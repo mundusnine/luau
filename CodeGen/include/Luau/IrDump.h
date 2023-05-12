@@ -11,14 +11,17 @@ namespace Luau
 namespace CodeGen
 {
 
+struct CfgInfo;
+
 const char* getCmdName(IrCmd cmd);
 const char* getBlockKindName(IrBlockKind kind);
 
 struct IrToStringContext
 {
     std::string& result;
-    std::vector<IrBlock>& blocks;
-    std::vector<IrConst>& constants;
+    const std::vector<IrBlock>& blocks;
+    const std::vector<IrConst>& constants;
+    const CfgInfo& cfg;
 };
 
 void toString(IrToStringContext& ctx, const IrInst& inst, uint32_t index);
@@ -27,12 +30,16 @@ void toString(IrToStringContext& ctx, IrOp op);
 
 void toString(std::string& result, IrConst constant);
 
-void toStringDetailed(IrToStringContext& ctx, const IrInst& inst, uint32_t index);
-void toStringDetailed(IrToStringContext& ctx, const IrBlock& block, uint32_t index); // Block title
+void toStringDetailed(IrToStringContext& ctx, const IrBlock& block, uint32_t blockIdx, const IrInst& inst, uint32_t instIdx, bool includeUseInfo);
+void toStringDetailed(IrToStringContext& ctx, const IrBlock& block, uint32_t index, bool includeUseInfo); // Block title
 
-std::string toString(IrFunction& function, bool includeDetails);
+std::string toString(const IrFunction& function, bool includeUseInfo);
 
-std::string dump(IrFunction& function);
+std::string dump(const IrFunction& function);
+
+std::string toDot(const IrFunction& function, bool includeInst);
+
+std::string dumpDot(const IrFunction& function, bool includeInst);
 
 } // namespace CodeGen
 } // namespace Luau

@@ -168,7 +168,7 @@ TEST_CASE_FIXTURE(Fixture, "cyclic_types_of_named_table_fields_do_not_expand_whe
     TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
     REQUIRE(tm);
     CHECK_EQ("Node?", toString(tm->wantedType));
-    CHECK_EQ(typeChecker.numberType, tm->givenType);
+    CHECK_EQ(builtinTypes->numberType, tm->givenType);
 }
 
 TEST_CASE_FIXTURE(Fixture, "mutually_recursive_aliases")
@@ -329,7 +329,7 @@ TEST_CASE_FIXTURE(Fixture, "stringify_type_alias_of_recursive_template_table_typ
     TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
     REQUIRE(tm);
     CHECK_EQ("Wrapped", toString(tm->wantedType));
-    CHECK_EQ(typeChecker.numberType, tm->givenType);
+    CHECK_EQ(builtinTypes->numberType, tm->givenType);
 }
 
 TEST_CASE_FIXTURE(Fixture, "stringify_type_alias_of_recursive_template_table_type2")
@@ -345,7 +345,7 @@ TEST_CASE_FIXTURE(Fixture, "stringify_type_alias_of_recursive_template_table_typ
     TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
     REQUIRE(tm);
     CHECK_EQ("t1 where t1 = ({| a: t1 |}) -> string", toString(tm->wantedType));
-    CHECK_EQ(typeChecker.numberType, tm->givenType);
+    CHECK_EQ(builtinTypes->numberType, tm->givenType);
 }
 
 // Check that recursive intersection type doesn't generate an OOM
@@ -520,7 +520,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "type_alias_import_mutation")
     CheckResult result = check("type t10<x> = typeof(table)");
     LUAU_REQUIRE_NO_ERRORS(result);
 
-    TypeId ty = getGlobalBinding(frontend, "table");
+    TypeId ty = getGlobalBinding(frontend.globals, "table");
 
     CHECK(toString(ty) == "typeof(table)");
 
@@ -920,6 +920,128 @@ TEST_CASE_FIXTURE(Fixture, "cannot_create_cyclic_type_with_unknown_module")
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
     CHECK(toString(result.errors[0]) == "Unknown type 'B.AAA'");
+}
+
+TEST_CASE_FIXTURE(Fixture, "type_alias_locations")
+{
+    check(R"(
+        type T = number
+
+        do
+            type T = string
+            type X = boolean
+        end
+    )");
+
+    ModulePtr mod = getMainModule();
+    REQUIRE(mod);
+    REQUIRE(mod->scopes.size() == 8);
+
+    REQUIRE(mod->scopes[0].second->typeAliasNameLocations.count("T") > 0);
+    CHECK(mod->scopes[0].second->typeAliasNameLocations["T"] == Location(Position(1, 13), 1));
+
+    REQUIRE(mod->scopes[3].second->typeAliasNameLocations.count("T") > 0);
+    CHECK(mod->scopes[3].second->typeAliasNameLocations["T"] == Location(Position(4, 17), 1));
+
+    REQUIRE(mod->scopes[3].second->typeAliasNameLocations.count("X") > 0);
+    CHECK(mod->scopes[3].second->typeAliasNameLocations["X"] == Location(Position(5, 17), 1));
+}
+
+/*
+ * We had a bug in DCR where substitution would improperly clone a
+ * PendingExpansionType.
+ *
+ * This cloned type did not have a matching constraint to expand it, so it was
+ * left dangling and unexpanded forever.
+ *
+ * We must also delay the dispatch a constraint if doing so would require
+ * unifying a PendingExpansionType.
+ */
+TEST_CASE_FIXTURE(BuiltinsFixture, "dont_lose_track_of_PendingExpansionTypes_after_substitution")
+{
+    fileResolver.source["game/ReactCurrentDispatcher"] = R"(
+        export type BasicStateAction<S> = ((S) -> S) | S
+        export type Dispatch<A> = (A) -> ()
+
+        export type Dispatcher = {
+            useState: <S>(initialState: (() -> S) | S) -> (S, Dispatch<BasicStateAction<S>>),
+        }
+
+        return {}
+    )";
+
+    // Note: This script path is actually as short as it can be.  Any shorter
+    // and we somehow fail to surface the bug.
+    fileResolver.source["game/React/React/ReactHooks"] = R"(
+        local RCD = require(script.Parent.Parent.Parent.ReactCurrentDispatcher)
+
+        local function resolveDispatcher(): RCD.Dispatcher
+            return (nil :: any) :: RCD.Dispatcher
+        end
+
+        function useState<S>(
+            initialState: (() -> S) | S
+        ): (S, RCD.Dispatch<RCD.BasicStateAction<S>>)
+            local dispatcher = resolveDispatcher()
+            return dispatcher.useState(initialState)
+        end
+    )";
+
+    CheckResult result = frontend.check("game/React/React/ReactHooks");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "another_thing_from_roact")
+{
+    CheckResult result = check(R"(
+        type Map<K, V> = { [K]: V }
+        type Set<T> = { [T]: boolean }
+
+        type FiberRoot = {
+            pingCache: Map<Wakeable, (Set<any> | Map<Wakeable, Set<any>>)> | nil,
+        }
+
+        type Wakeable = {
+            andThen: (self: Wakeable) -> nil | Wakeable,
+        }
+
+        local function attachPingListener(root: FiberRoot, wakeable: Wakeable, lanes: number)
+            local pingCache: Map<Wakeable, (Set<any> | Map<Wakeable, Set<any>>)> | nil = root.pingCache
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+/*
+ * It is sometimes possible for type alias resolution to produce a TypeId that
+ * belongs to a different module.
+ *
+ * We must not mutate any fields of the resulting type when this happens.  The
+ * memory has been frozen.
+ */
+TEST_CASE_FIXTURE(BuiltinsFixture, "alias_expands_to_bare_reference_to_imported_type")
+{
+    fileResolver.source["game/A"] = R"(
+        --!strict
+        export type Object = {[string]: any}
+        return {}
+    )";
+
+    fileResolver.source["game/B"] = R"(
+        local A = require(script.Parent.A)
+
+        type Object = A.Object
+        type ReadOnly<T> = T
+
+        local function f(): ReadOnly<Object>
+            return nil :: any
+        end
+    )";
+
+    CheckResult result = frontend.check("game/B");
+    LUAU_REQUIRE_NO_ERRORS(result);
 }
 
 TEST_SUITE_END();

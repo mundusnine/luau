@@ -35,7 +35,7 @@ TEST_CASE_FIXTURE(Fixture, "UnknownGlobal")
 TEST_CASE_FIXTURE(Fixture, "DeprecatedGlobal")
 {
     // Normally this would be defined externally, so hack it in for testing
-    addGlobalBinding(frontend, "Wait", Binding{typeChecker.anyType, {}, true, "wait", "@test/global/Wait"});
+    addGlobalBinding(frontend.globals, "Wait", Binding{builtinTypes->anyType, {}, true, "wait", "@test/global/Wait"});
 
     LintResult result = lint("Wait(5)");
 
@@ -47,7 +47,7 @@ TEST_CASE_FIXTURE(Fixture, "DeprecatedGlobalNoReplacement")
 {
     // Normally this would be defined externally, so hack it in for testing
     const char* deprecationReplacementString = "";
-    addGlobalBinding(frontend, "Version", Binding{typeChecker.anyType, {}, true, deprecationReplacementString});
+    addGlobalBinding(frontend.globals, "Version", Binding{builtinTypes->anyType, {}, true, deprecationReplacementString});
 
     LintResult result = lint("Version()");
 
@@ -373,7 +373,7 @@ return bar()
 TEST_CASE_FIXTURE(Fixture, "ImportUnused")
 {
     // Normally this would be defined externally, so hack it in for testing
-    addGlobalBinding(frontend, "game", typeChecker.anyType, "@test");
+    addGlobalBinding(frontend.globals, "game", builtinTypes->anyType, "@test");
 
     LintResult result = lint(R"(
 local Roact = require(game.Packages.Roact)
@@ -604,16 +604,16 @@ return foo1
 
 TEST_CASE_FIXTURE(Fixture, "UnknownType")
 {
-    unfreeze(typeChecker.globalTypes);
+    unfreeze(frontend.globals.globalTypes);
     TableType::Props instanceProps{
-        {"ClassName", {typeChecker.anyType}},
+        {"ClassName", {builtinTypes->anyType}},
     };
 
-    TableType instanceTable{instanceProps, std::nullopt, typeChecker.globalScope->level, Luau::TableState::Sealed};
-    TypeId instanceType = typeChecker.globalTypes.addType(instanceTable);
+    TableType instanceTable{instanceProps, std::nullopt, frontend.globals.globalScope->level, Luau::TableState::Sealed};
+    TypeId instanceType = frontend.globals.globalTypes.addType(instanceTable);
     TypeFun instanceTypeFun{{}, instanceType};
 
-    typeChecker.globalScope->exportedTypeBindings["Part"] = instanceTypeFun;
+    frontend.globals.globalScope->exportedTypeBindings["Part"] = instanceTypeFun;
 
     LintResult result = lint(R"(
 local game = ...
@@ -733,6 +733,7 @@ end
 TEST_CASE_FIXTURE(Fixture, "ImplicitReturn")
 {
     LintResult result = lint(R"(
+--!nonstrict
 function f1(a)
     if not a then
         return 5
@@ -789,20 +790,21 @@ return f1,f2,f3,f4,f5,f6,f7
 )");
 
     REQUIRE(3 == result.warnings.size());
-    CHECK_EQ(result.warnings[0].location.begin.line, 4);
+    CHECK_EQ(result.warnings[0].location.begin.line, 5);
     CHECK_EQ(result.warnings[0].text,
-        "Function 'f1' can implicitly return no values even though there's an explicit return at line 4; add explicit return to silence");
-    CHECK_EQ(result.warnings[1].location.begin.line, 28);
+        "Function 'f1' can implicitly return no values even though there's an explicit return at line 5; add explicit return to silence");
+    CHECK_EQ(result.warnings[1].location.begin.line, 29);
     CHECK_EQ(result.warnings[1].text,
-        "Function 'f4' can implicitly return no values even though there's an explicit return at line 25; add explicit return to silence");
-    CHECK_EQ(result.warnings[2].location.begin.line, 44);
+        "Function 'f4' can implicitly return no values even though there's an explicit return at line 26; add explicit return to silence");
+    CHECK_EQ(result.warnings[2].location.begin.line, 45);
     CHECK_EQ(result.warnings[2].text,
-        "Function can implicitly return no values even though there's an explicit return at line 44; add explicit return to silence");
+        "Function can implicitly return no values even though there's an explicit return at line 45; add explicit return to silence");
 }
 
 TEST_CASE_FIXTURE(Fixture, "ImplicitReturnInfiniteLoop")
 {
     LintResult result = lint(R"(
+--!nonstrict
 function f1(a)
     while true do
         if math.random() > 0.5 then
@@ -845,12 +847,12 @@ return f1,f2,f3,f4
 )");
 
     REQUIRE(2 == result.warnings.size());
-    CHECK_EQ(result.warnings[0].location.begin.line, 25);
+    CHECK_EQ(result.warnings[0].location.begin.line, 26);
     CHECK_EQ(result.warnings[0].text,
-        "Function 'f3' can implicitly return no values even though there's an explicit return at line 21; add explicit return to silence");
-    CHECK_EQ(result.warnings[1].location.begin.line, 36);
+        "Function 'f3' can implicitly return no values even though there's an explicit return at line 22; add explicit return to silence");
+    CHECK_EQ(result.warnings[1].location.begin.line, 37);
     CHECK_EQ(result.warnings[1].text,
-        "Function 'f4' can implicitly return no values even though there's an explicit return at line 32; add explicit return to silence");
+        "Function 'f4' can implicitly return no values even though there's an explicit return at line 33; add explicit return to silence");
 }
 
 TEST_CASE_FIXTURE(Fixture, "TypeAnnotationsShouldNotProduceWarnings")
@@ -1164,7 +1166,7 @@ os.date("!*t")
 
 TEST_CASE_FIXTURE(Fixture, "FormatStringTyped")
 {
-    LintResult result = lintTyped(R"~(
+    LintResult result = lint(R"~(
 local s: string, nons = ...
 
 string.match(s, "[]")
@@ -1270,12 +1272,12 @@ TEST_CASE_FIXTURE(Fixture, "no_spurious_warning_after_a_function_type_alias")
 TEST_CASE_FIXTURE(Fixture, "use_all_parent_scopes_for_globals")
 {
     ScopePtr testScope = frontend.addEnvironment("Test");
-    unfreeze(typeChecker.globalTypes);
-    loadDefinitionFile(frontend.typeChecker, testScope, R"(
+    unfreeze(frontend.globals.globalTypes);
+    frontend.loadDefinitionFile(frontend.globals, testScope, R"(
         declare Foo: number
     )",
-        "@test");
-    freeze(typeChecker.globalTypes);
+        "@test", /* captureComments */ false);
+    freeze(frontend.globals.globalTypes);
 
     fileResolver.environments["A"] = "Test";
 
@@ -1285,7 +1287,7 @@ TEST_CASE_FIXTURE(Fixture, "use_all_parent_scopes_for_globals")
         local _bar: typeof(os.clock) = os.clock
     )";
 
-    LintResult result = frontend.lint("A");
+    LintResult result = lintModule("A");
 
     REQUIRE(0 == result.warnings.size());
 }
@@ -1442,35 +1444,34 @@ TEST_CASE_FIXTURE(Fixture, "LintHygieneUAF")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "DeprecatedApiTyped")
 {
-    ScopedFastFlag sff("LuauImproveDeprecatedApiLint", true);
-
-    unfreeze(typeChecker.globalTypes);
-    TypeId instanceType = typeChecker.globalTypes.addType(ClassType{"Instance", {}, std::nullopt, std::nullopt, {}, {}, "Test"});
+    unfreeze(frontend.globals.globalTypes);
+    TypeId instanceType = frontend.globals.globalTypes.addType(ClassType{"Instance", {}, std::nullopt, std::nullopt, {}, {}, "Test"});
     persist(instanceType);
-    typeChecker.globalScope->exportedTypeBindings["Instance"] = TypeFun{{}, instanceType};
+    frontend.globals.globalScope->exportedTypeBindings["Instance"] = TypeFun{{}, instanceType};
 
     getMutable<ClassType>(instanceType)->props = {
-        {"Name", {typeChecker.stringType}},
-        {"DataCost", {typeChecker.numberType, /* deprecated= */ true}},
-        {"Wait", {typeChecker.anyType, /* deprecated= */ true}},
+        {"Name", {builtinTypes->stringType}},
+        {"DataCost", {builtinTypes->numberType, /* deprecated= */ true}},
+        {"Wait", {builtinTypes->anyType, /* deprecated= */ true}},
     };
 
-    TypeId colorType = typeChecker.globalTypes.addType(TableType{{}, std::nullopt, typeChecker.globalScope->level, Luau::TableState::Sealed});
+    TypeId colorType =
+        frontend.globals.globalTypes.addType(TableType{{}, std::nullopt, frontend.globals.globalScope->level, Luau::TableState::Sealed});
 
-    getMutable<TableType>(colorType)->props = {{"toHSV", {typeChecker.anyType, /* deprecated= */ true, "Color3:ToHSV"}}};
+    getMutable<TableType>(colorType)->props = {{"toHSV", {builtinTypes->anyType, /* deprecated= */ true, "Color3:ToHSV"}}};
 
-    addGlobalBinding(frontend, "Color3", Binding{colorType, {}});
+    addGlobalBinding(frontend.globals, "Color3", Binding{colorType, {}});
 
-    if (TableType* ttv = getMutable<TableType>(getGlobalBinding(typeChecker, "table")))
+    if (TableType* ttv = getMutable<TableType>(getGlobalBinding(frontend.globals, "table")))
     {
         ttv->props["foreach"].deprecated = true;
         ttv->props["getn"].deprecated = true;
         ttv->props["getn"].deprecatedSuggestion = "#";
     }
 
-    freeze(typeChecker.globalTypes);
+    freeze(frontend.globals.globalTypes);
 
-    LintResult result = lintTyped(R"(
+    LintResult result = lint(R"(
 return function (i: Instance)
     i:Wait(1.0)
     print(i.Name)
@@ -1493,9 +1494,7 @@ end
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "DeprecatedApiUntyped")
 {
-    ScopedFastFlag sff("LuauImproveDeprecatedApiLint", true);
-
-    if (TableType* ttv = getMutable<TableType>(getGlobalBinding(typeChecker, "table")))
+    if (TableType* ttv = getMutable<TableType>(getGlobalBinding(frontend.globals, "table")))
     {
         ttv->props["foreach"].deprecated = true;
         ttv->props["getn"].deprecated = true;
@@ -1517,7 +1516,7 @@ end
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "TableOperations")
 {
-    LintResult result = lintTyped(R"(
+    LintResult result = lint(R"(
 local t = {}
 local tt = {}
 

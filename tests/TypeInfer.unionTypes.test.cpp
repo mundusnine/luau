@@ -131,7 +131,7 @@ TEST_CASE_FIXTURE(Fixture, "index_on_a_union_type_with_property_guaranteed_to_ex
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
-    CHECK_EQ(*typeChecker.numberType, *requireType("r"));
+    CHECK_EQ(*builtinTypes->numberType, *requireType("r"));
 }
 
 TEST_CASE_FIXTURE(Fixture, "index_on_a_union_type_with_mixed_types")
@@ -196,7 +196,6 @@ TEST_CASE_FIXTURE(Fixture, "index_on_a_union_type_with_missing_property")
     REQUIRE(bTy);
     CHECK_EQ(mup->missing[0], *bTy);
     CHECK_EQ(mup->key, "x");
-
     CHECK_EQ("*error-type*", toString(requireType("r")));
 }
 
@@ -211,7 +210,7 @@ TEST_CASE_FIXTURE(Fixture, "index_on_a_union_type_with_one_property_of_type_any"
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
-    CHECK_EQ(*typeChecker.anyType, *requireType("r"));
+    CHECK_EQ(*builtinTypes->anyType, *requireType("r"));
 }
 
 TEST_CASE_FIXTURE(Fixture, "union_equality_comparisons")
@@ -245,7 +244,7 @@ local c = bf.a.y
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ(*typeChecker.numberType, *requireType("c"));
+    CHECK_EQ(*builtinTypes->numberType, *requireType("c"));
     CHECK_EQ("Value of type 'A?' could be nil", toString(result.errors[0]));
 }
 
@@ -260,7 +259,7 @@ TEST_CASE_FIXTURE(Fixture, "optional_union_functions")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ(*typeChecker.numberType, *requireType("c"));
+    CHECK_EQ(*builtinTypes->numberType, *requireType("c"));
     CHECK_EQ("Value of type 'A?' could be nil", toString(result.errors[0]));
 }
 
@@ -275,7 +274,7 @@ local c = b:foo(1, 2)
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ(*typeChecker.numberType, *requireType("c"));
+    CHECK_EQ(*builtinTypes->numberType, *requireType("c"));
     CHECK_EQ("Value of type 'A?' could be nil", toString(result.errors[0]));
 }
 
@@ -354,7 +353,11 @@ a.x = 2
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ("Value of type '({| x: number |} & {| y: number |})?' could be nil", toString(result.errors[0]));
+    auto s = toString(result.errors[0]);
+    if (FFlag::DebugLuauDeferredConstraintResolution)
+        CHECK_EQ("Value of type '{| x: number, y: number |}?' could be nil", s);
+    else
+        CHECK_EQ("Value of type '({| x: number |} & {| y: number |})?' could be nil", s);
 }
 
 TEST_CASE_FIXTURE(Fixture, "optional_length_error")
@@ -713,6 +716,158 @@ TEST_CASE_FIXTURE(Fixture, "less_greedy_unification_with_union_types_2")
     LUAU_REQUIRE_NO_ERRORS(result);
 
     CHECK_EQ("({| x: number |} | {| x: string |}) -> number | string", toString(requireType("f")));
+}
+
+TEST_CASE_FIXTURE(Fixture, "union_table_any_property")
+{
+    CheckResult result = check(R"(
+        function f(x)
+            -- x : X
+            -- sup : { p : { q : X } }?
+            local sup = if true then { p = { q = x } } else nil
+            local sub : { p : any }
+            sup = nil
+            sup = sub
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "union_function_any_args")
+{
+    CheckResult result = check(R"(
+        local sup : ((...any) -> (...any))?
+        local sub : ((number) -> (...any))
+        sup = sub
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "optional_any")
+{
+    CheckResult result = check(R"(
+        local sup : any?
+        local sub : number
+        sup = sub
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "generic_function_with_optional_arg")
+{
+    ScopedFastFlag sff[] = {
+        {"LuauTransitiveSubtyping", true},
+    };
+
+    CheckResult result = check(R"(
+        function f<T>(x : T?) : {T}
+            local result = {}
+            if x then
+                result[1] = x
+            end
+            return result
+        end
+        local t : {string} = f(nil)
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "lookup_prop_of_intersection_containing_unions")
+{
+    CheckResult result = check(R"(
+        local function mergeOptions<T>(options: T & ({} | {}))
+            return options.variables
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+
+    const UnknownProperty* unknownProp = get<UnknownProperty>(result.errors[0]);
+    REQUIRE(unknownProp);
+
+    CHECK("variables" == unknownProp->key);
+}
+
+TEST_CASE_FIXTURE(Fixture, "free_options_can_be_unified_together")
+{
+    ScopedFastFlag sff[] = {
+        {"LuauTransitiveSubtyping", true},
+        {"LuauUnifyTwoOptions", true}
+    };
+
+    TypeArena arena;
+    TypeId nilType = builtinTypes->nilType;
+
+    std::unique_ptr scope = std::make_unique<Scope>(builtinTypes->anyTypePack);
+
+    TypeId free1 = arena.addType(FreeType{scope.get()});
+    TypeId option1 = arena.addType(UnionType{{nilType, free1}});
+
+    TypeId free2 = arena.addType(FreeType{scope.get()});
+    TypeId option2 = arena.addType(UnionType{{nilType, free2}});
+
+    InternalErrorReporter iceHandler;
+    UnifierSharedState sharedState{&iceHandler};
+    Normalizer normalizer{&arena, builtinTypes, NotNull{&sharedState}};
+    Unifier u{NotNull{&normalizer}, Mode::Strict, NotNull{scope.get()}, Location{}, Variance::Covariant};
+
+    u.tryUnify(option1, option2);
+
+    CHECK(!u.failure);
+
+    u.log.commit();
+
+    ToStringOptions opts;
+    CHECK("a?" == toString(option1, opts));
+    CHECK("a?" == toString(option2, opts));
+}
+
+TEST_CASE_FIXTURE(Fixture, "unify_more_complex_unions_that_include_nil")
+{
+    CheckResult result = check(R"(
+        type Record = {prop: (string | boolean)?}
+
+        function concatPagination(prop: (string | boolean | nil)?): Record
+            return {prop = prop}
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "optional_class_instances_are_invariant")
+{
+    ScopedFastFlag sff[] = {
+        {"LuauUnifyTwoOptions", true},
+        {"LuauTypeMismatchInvarianceInError", true}
+    };
+
+    createSomeClasses(&frontend);
+
+    CheckResult result = check(R"(
+        function foo(ref: {current: Parent?})
+        end
+
+        function bar(ref: {current: Child?})
+            foo(ref)
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+
+    // The last line of this error is the most important part.  We need to
+    // communicate that this is an invariant context.
+    std::string expectedError =
+        "Type '{| current: Child? |}' could not be converted into '{| current: Parent? |}'\n"
+        "caused by:\n"
+        "  Property 'current' is not compatible. Type 'Child' could not be converted into 'Parent' in an invariant context"
+    ;
+
+    CHECK(expectedError == toString(result.errors[0]));
 }
 
 TEST_SUITE_END();

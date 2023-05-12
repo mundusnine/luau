@@ -1677,8 +1677,6 @@ RETURN R0 0
 
 TEST_CASE("LoopBreak")
 {
-    ScopedFastFlag sff("LuauCompileTerminateBC", true);
-
     // default codegen: compile breaks as unconditional jumps
     CHECK_EQ("\n" + compileFunction0("while true do if math.random() < 0.5 then break else end end"), R"(
 L0: GETIMPORT R0 2 [math.random]
@@ -1703,8 +1701,6 @@ L1: RETURN R0 0
 
 TEST_CASE("LoopContinue")
 {
-    ScopedFastFlag sff("LuauCompileTerminateBC", true);
-
     // default codegen: compile continue as unconditional jumps
     CHECK_EQ("\n" + compileFunction0("repeat if math.random() < 0.5 then continue else end break until false error()"), R"(
 L0: GETIMPORT R0 2 [math.random]
@@ -2213,6 +2209,46 @@ TEST_CASE("RecursionParse")
     catch (std::exception& e)
     {
         CHECK_EQ(std::string(e.what()), "Exceeded allowed recursion depth; simplify your block to make the code compile");
+    }
+
+    try
+    {
+        Luau::compileOrThrow(bcb, "local f: " + rep("(", 1500) + "nil" + rep(")", 1500));
+        CHECK(!"Expected exception");
+    }
+    catch (std::exception& e)
+    {
+        CHECK_EQ(std::string(e.what()), "Exceeded allowed recursion depth; simplify your type annotation to make the code compile");
+    }
+
+    try
+    {
+        Luau::compileOrThrow(bcb, "local f: () " + rep("-> ()", 1500));
+        CHECK(!"Expected exception");
+    }
+    catch (std::exception& e)
+    {
+        CHECK_EQ(std::string(e.what()), "Exceeded allowed recursion depth; simplify your type annotation to make the code compile");
+    }
+
+    try
+    {
+        Luau::compileOrThrow(bcb, "local f: " + rep("{x:", 1500) + "nil" + rep("}", 1500));
+        CHECK(!"Expected exception");
+    }
+    catch (std::exception& e)
+    {
+        CHECK_EQ(std::string(e.what()), "Exceeded allowed recursion depth; simplify your type annotation to make the code compile");
+    }
+
+    try
+    {
+        Luau::compileOrThrow(bcb, "local f: " + rep("(nil & ", 1500) + "nil" + rep(")", 1500));
+        CHECK(!"Expected exception");
+    }
+    catch (std::exception& e)
+    {
+        CHECK_EQ(std::string(e.what()), "Exceeded allowed recursion depth; simplify your type annotation to make the code compile");
     }
 }
 
@@ -4655,8 +4691,6 @@ RETURN R0 0
 
 TEST_CASE("LoopUnrollCost")
 {
-    ScopedFastFlag sff("LuauCompileBuiltinArity", true);
-
     ScopedFastInt sfis[] = {
         {"LuauCompileLoopUnrollThreshold", 25},
         {"LuauCompileLoopUnrollThresholdMaxBoost", 300},
@@ -5926,8 +5960,6 @@ RETURN R2 1
 
 TEST_CASE("InlineMultret")
 {
-    ScopedFastFlag sff("LuauCompileBuiltinArity", true);
-
     // inlining a function in multret context is prohibited since we can't adjust L->top outside of CALL/GETVARARGS
     CHECK_EQ("\n" + compileFunction(R"(
 local function foo(a)
@@ -6265,8 +6297,6 @@ RETURN R0 52
 
 TEST_CASE("BuiltinFoldingProhibited")
 {
-    ScopedFastFlag sff("LuauCompileBuiltinArity", true);
-
     CHECK_EQ("\n" + compileFunction(R"(
 return
     math.abs(),
@@ -6816,8 +6846,6 @@ RETURN R0 0
 
 TEST_CASE("ElideJumpAfterIf")
 {
-    ScopedFastFlag sff("LuauCompileTerminateBC", true);
-
     // break refers to outer loop => we can elide unconditional branches
     CHECK_EQ("\n" + compileFunction0(R"(
 local foo, bar = ...
@@ -6871,8 +6899,6 @@ L3: RETURN R0 0
 
 TEST_CASE("BuiltinArity")
 {
-    ScopedFastFlag sff("LuauCompileBuiltinArity", true);
-
     // by default we can't assume that we know parameter/result count for builtins as they can be overridden at runtime
     CHECK_EQ("\n" + compileFunction(R"(
 return math.abs(unknown())

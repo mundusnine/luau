@@ -86,7 +86,7 @@ TEST_CASE_FIXTURE(Fixture, "function_return_annotations_are_checked")
 
     REQUIRE_EQ(1, tp->head.size());
 
-    REQUIRE_EQ(typeChecker.anyType, follow(tp->head[0]));
+    REQUIRE_EQ(builtinTypes->anyType, follow(tp->head[0]));
 }
 
 TEST_CASE_FIXTURE(Fixture, "function_return_multret_annotations_are_checked")
@@ -166,11 +166,12 @@ TEST_CASE_FIXTURE(Fixture, "infer_type_of_value_a_via_typeof_with_assignment")
         a = "foo"
     )");
 
-    CHECK_EQ(*typeChecker.numberType, *requireType("a"));
-    CHECK_EQ(*typeChecker.numberType, *requireType("b"));
+    CHECK_EQ(*builtinTypes->numberType, *requireType("a"));
+    CHECK_EQ(*builtinTypes->numberType, *requireType("b"));
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ(result.errors[0], (TypeError{Location{Position{4, 12}, Position{4, 17}}, TypeMismatch{typeChecker.numberType, typeChecker.stringType}}));
+    CHECK_EQ(
+        result.errors[0], (TypeError{Location{Position{4, 12}, Position{4, 17}}, TypeMismatch{builtinTypes->numberType, builtinTypes->stringType}}));
 }
 
 TEST_CASE_FIXTURE(Fixture, "table_annotation")
@@ -329,7 +330,7 @@ TEST_CASE_FIXTURE(Fixture, "self_referential_type_alias")
     std::optional<Property> incr = get(oTable->props, "incr");
     REQUIRE(incr);
 
-    const FunctionType* incrFunc = get<FunctionType>(incr->type);
+    const FunctionType* incrFunc = get<FunctionType>(incr->type());
     REQUIRE(incrFunc);
 
     std::optional<TypeId> firstArg = first(incrFunc->argTypes);
@@ -434,6 +435,10 @@ TEST_CASE_FIXTURE(Fixture, "typeof_expr")
 
 TEST_CASE_FIXTURE(Fixture, "corecursive_types_error_on_tight_loop")
 {
+    ScopedFastFlag flags[] = {
+        {"LuauOccursIsntAlwaysFailure", true},
+    };
+
     CheckResult result = check(R"(
         type A = B
         type B = A
@@ -442,10 +447,10 @@ TEST_CASE_FIXTURE(Fixture, "corecursive_types_error_on_tight_loop")
         local bb:B
     )");
 
-    TypeId fType = requireType("aa");
-    const AnyType* ftv = get<AnyType>(follow(fType));
-    REQUIRE(ftv != nullptr);
-    REQUIRE(!result.errors.empty());
+    LUAU_REQUIRE_ERROR_COUNT(1, result);
+
+    OccursCheckFailed* ocf = get<OccursCheckFailed>(result.errors[0]);
+    REQUIRE(ocf);
 }
 
 TEST_CASE_FIXTURE(Fixture, "type_alias_always_resolve_to_a_real_type")
@@ -459,7 +464,7 @@ TEST_CASE_FIXTURE(Fixture, "type_alias_always_resolve_to_a_real_type")
     )");
 
     TypeId fType = requireType("aa");
-    REQUIRE(follow(fType) == typeChecker.numberType);
+    REQUIRE(follow(fType) == builtinTypes->numberType);
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
@@ -480,7 +485,7 @@ TEST_CASE_FIXTURE(Fixture, "interface_types_belong_to_interface_arena")
     const TypeFun& a = mod.exportedTypeBindings["A"];
 
     CHECK(isInArena(a.type, mod.interfaceTypes));
-    CHECK(!isInArena(a.type, typeChecker.globalTypes));
+    CHECK(!isInArena(a.type, frontend.globals.globalTypes));
 
     std::optional<TypeId> exportsType = first(mod.returnType);
     REQUIRE(exportsType);
@@ -488,7 +493,7 @@ TEST_CASE_FIXTURE(Fixture, "interface_types_belong_to_interface_arena")
     TableType* exportsTable = getMutable<TableType>(*exportsType);
     REQUIRE(exportsTable != nullptr);
 
-    TypeId n = exportsTable->props["n"].type;
+    TypeId n = exportsTable->props["n"].type();
     REQUIRE(n != nullptr);
 
     CHECK(isInArena(n, mod.interfaceTypes));
@@ -543,10 +548,10 @@ TEST_CASE_FIXTURE(Fixture, "cloned_interface_maintains_pointers_between_definiti
     TableType* exportsTable = getMutable<TableType>(*exportsType);
     REQUIRE(exportsTable != nullptr);
 
-    TypeId aType = exportsTable->props["a"].type;
+    TypeId aType = exportsTable->props["a"].type();
     REQUIRE(aType);
 
-    TypeId bType = exportsTable->props["b"].type;
+    TypeId bType = exportsTable->props["b"].type();
     REQUIRE(bType);
 
     CHECK(isInArena(recordType, mod.interfaceTypes));
@@ -559,7 +564,7 @@ TEST_CASE_FIXTURE(Fixture, "cloned_interface_maintains_pointers_between_definiti
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "use_type_required_from_another_file")
 {
-    addGlobalBinding(frontend, "script", frontend.typeChecker.anyType, "@test");
+    addGlobalBinding(frontend.globals, "script", builtinTypes->anyType, "@test");
 
     fileResolver.source["Modules/Main"] = R"(
         --!strict
@@ -585,7 +590,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "use_type_required_from_another_file")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "cannot_use_nonexported_type")
 {
-    addGlobalBinding(frontend, "script", frontend.typeChecker.anyType, "@test");
+    addGlobalBinding(frontend.globals, "script", builtinTypes->anyType, "@test");
 
     fileResolver.source["Modules/Main"] = R"(
         --!strict
@@ -611,7 +616,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "cannot_use_nonexported_type")
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "builtin_types_are_not_exported")
 {
-    addGlobalBinding(frontend, "script", frontend.typeChecker.anyType, "@test");
+    addGlobalBinding(frontend.globals, "script", builtinTypes->anyType, "@test");
 
     fileResolver.source["Modules/Main"] = R"(
         --!strict
@@ -761,6 +766,7 @@ TEST_CASE_FIXTURE(Fixture, "occurs_check_on_cyclic_union_type")
 {
     CheckResult result = check(R"(
         type T = T | T
+        local x : T
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);

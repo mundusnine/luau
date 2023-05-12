@@ -33,8 +33,8 @@ TEST_CASE_FIXTURE(Fixture, "check_function_bodies")
     LUAU_REQUIRE_ERROR_COUNT(1, result);
 
     CHECK_EQ(result.errors[0], (TypeError{Location{Position{0, 44}, Position{0, 48}}, TypeMismatch{
-                                                                                          typeChecker.numberType,
-                                                                                          typeChecker.booleanType,
+                                                                                          builtinTypes->numberType,
+                                                                                          builtinTypes->booleanType,
                                                                                       }}));
 }
 
@@ -70,7 +70,7 @@ TEST_CASE_FIXTURE(Fixture, "infer_return_type")
     std::vector<TypeId> retVec = flatten(takeFiveType->retTypes).first;
     REQUIRE(!retVec.empty());
 
-    REQUIRE_EQ(*follow(retVec[0]), *typeChecker.numberType);
+    REQUIRE_EQ(*follow(retVec[0]), *builtinTypes->numberType);
 }
 
 TEST_CASE_FIXTURE(Fixture, "infer_from_function_return_type")
@@ -78,7 +78,7 @@ TEST_CASE_FIXTURE(Fixture, "infer_from_function_return_type")
     CheckResult result = check("function take_five() return 5 end    local five = take_five()");
     LUAU_REQUIRE_NO_ERRORS(result);
 
-    CHECK_EQ(*typeChecker.numberType, *follow(requireType("five")));
+    CHECK_EQ(*builtinTypes->numberType, *follow(requireType("five")));
 }
 
 TEST_CASE_FIXTURE(Fixture, "infer_that_function_does_not_return_a_table")
@@ -92,7 +92,7 @@ TEST_CASE_FIXTURE(Fixture, "infer_that_function_does_not_return_a_table")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ(result.errors[0], (TypeError{Location{Position{5, 8}, Position{5, 24}}, NotATable{typeChecker.numberType}}));
+    CHECK_EQ(result.errors[0], (TypeError{Location{Position{5, 8}, Position{5, 24}}, NotATable{builtinTypes->numberType}}));
 }
 
 TEST_CASE_FIXTURE(Fixture, "generalize_table_property")
@@ -111,7 +111,7 @@ TEST_CASE_FIXTURE(Fixture, "generalize_table_property")
     const TableType* tt = get<TableType>(follow(t));
     REQUIRE(tt);
 
-    TypeId fooTy = tt->props.at("foo").type;
+    TypeId fooTy = tt->props.at("foo").type();
     CHECK("<a>(a) -> a" == toString(fooTy));
 }
 
@@ -156,7 +156,7 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "vararg_function_is_quantified")
     REQUIRE(ttv);
 
     REQUIRE(ttv->props.count("f"));
-    TypeId k = ttv->props["f"].type;
+    TypeId k = ttv->props["f"].type();
     REQUIRE(k);
 }
 
@@ -169,14 +169,27 @@ TEST_CASE_FIXTURE(Fixture, "list_only_alternative_overloads_that_match_argument_
 
     LUAU_REQUIRE_ERROR_COUNT(2, result);
 
-    TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
-    REQUIRE(tm);
-    CHECK_EQ(typeChecker.numberType, tm->wantedType);
-    CHECK_EQ(typeChecker.stringType, tm->givenType);
+    if (FFlag::DebugLuauDeferredConstraintResolution)
+    {
+        GenericError* g = get<GenericError>(result.errors[0]);
+        REQUIRE(g);
+        CHECK(g->message == "None of the overloads for function that accept 1 arguments are compatible.");
+    }
+    else
+    {
+        TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
+        REQUIRE(tm);
+        CHECK_EQ(builtinTypes->numberType, tm->wantedType);
+        CHECK_EQ(builtinTypes->stringType, tm->givenType);
+    }
 
     ExtraInformation* ei = get<ExtraInformation>(result.errors[1]);
     REQUIRE(ei);
-    CHECK_EQ("Other overloads are also not viable: (number) -> string", ei->message);
+
+    if (FFlag::DebugLuauDeferredConstraintResolution)
+        CHECK("Available overloads: (number) -> number; and (number) -> string" == ei->message);
+    else
+        CHECK_EQ("Other overloads are also not viable: (number) -> string", ei->message);
 }
 
 TEST_CASE_FIXTURE(Fixture, "list_all_overloads_if_no_overload_takes_given_argument_count")
@@ -208,8 +221,8 @@ TEST_CASE_FIXTURE(Fixture, "dont_give_other_overloads_message_if_only_one_argume
 
     TypeMismatch* tm = get<TypeMismatch>(result.errors[0]);
     REQUIRE(tm);
-    CHECK_EQ(typeChecker.numberType, tm->wantedType);
-    CHECK_EQ(typeChecker.stringType, tm->givenType);
+    CHECK_EQ(builtinTypes->numberType, tm->wantedType);
+    CHECK_EQ(builtinTypes->stringType, tm->givenType);
 }
 
 TEST_CASE_FIXTURE(Fixture, "infer_return_type_from_selected_overload")
@@ -847,13 +860,13 @@ TEST_CASE_FIXTURE(Fixture, "calling_function_with_incorrect_argument_type_yields
     LUAU_REQUIRE_ERROR_COUNT(2, result);
 
     CHECK_EQ(result.errors[0], (TypeError{Location{Position{3, 12}, Position{3, 18}}, TypeMismatch{
-                                                                                          typeChecker.numberType,
-                                                                                          typeChecker.stringType,
+                                                                                          builtinTypes->numberType,
+                                                                                          builtinTypes->stringType,
                                                                                       }}));
 
     CHECK_EQ(result.errors[1], (TypeError{Location{Position{3, 20}, Position{3, 23}}, TypeMismatch{
-                                                                                          typeChecker.stringType,
-                                                                                          typeChecker.numberType,
+                                                                                          builtinTypes->stringType,
+                                                                                          builtinTypes->numberType,
                                                                                       }}));
 }
 
@@ -1281,6 +1294,39 @@ f(function(x) return x * 2 end)
     LUAU_REQUIRE_NO_ERRORS(result);
 }
 
+TEST_CASE_FIXTURE(Fixture, "variadic_any_is_compatible_with_a_generic_TypePack")
+{
+    ScopedFastFlag sff[] = {
+        {"LuauVariadicAnyCanBeGeneric", true}
+    };
+
+    CheckResult result = check(R"(
+        --!strict
+        local function f(...) return ... end
+        local g = function(...) return f(...) end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+// https://github.com/Roblox/luau/issues/767
+TEST_CASE_FIXTURE(BuiltinsFixture, "variadic_any_is_compatible_with_a_generic_TypePack_2")
+{
+    ScopedFastFlag sff{"LuauVariadicAnyCanBeGeneric", true};
+
+    CheckResult result = check(R"(
+        local function somethingThatsAny(...: any)
+            print(...)
+        end
+
+        local function x<T...>(...: T...)
+            somethingThatsAny(...) -- Failed to unify variadic type packs
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
 TEST_CASE_FIXTURE(Fixture, "infer_anonymous_function_arguments_outside_call")
 {
     CheckResult result = check(R"(
@@ -1669,6 +1715,10 @@ TEST_CASE_FIXTURE(Fixture, "dont_infer_parameter_types_for_functions_from_their_
     LUAU_REQUIRE_NO_ERRORS(result);
 
     CHECK_EQ("<a>(a) -> a", toString(requireType("f")));
+    if (FFlag::DebugLuauDeferredConstraintResolution)
+        CHECK_EQ("<a>({+ p: {+ q: a +} +}) -> a & ~false", toString(requireType("g")));
+    else
+        CHECK_EQ("({+ p: {+ q: nil +} +}) -> nil", toString(requireType("g")));
 }
 
 TEST_CASE_FIXTURE(Fixture, "dont_mutate_the_underlying_head_of_typepack_when_calling_with_self")
@@ -1780,7 +1830,6 @@ z = y -- Not OK, so the line is colorable
 
 TEST_CASE_FIXTURE(Fixture, "function_is_supertype_of_concrete_functions")
 {
-    ScopedFastFlag sff{"LuauNegatedFunctionTypes", true};
     registerHiddenTypes(&frontend);
 
     CheckResult result = check(R"(
@@ -1799,7 +1848,6 @@ TEST_CASE_FIXTURE(Fixture, "function_is_supertype_of_concrete_functions")
 
 TEST_CASE_FIXTURE(Fixture, "concrete_functions_are_not_supertypes_of_function")
 {
-    ScopedFastFlag sff{"LuauNegatedFunctionTypes", true};
     registerHiddenTypes(&frontend);
 
     CheckResult result = check(R"(
@@ -1820,7 +1868,6 @@ TEST_CASE_FIXTURE(Fixture, "concrete_functions_are_not_supertypes_of_function")
 
 TEST_CASE_FIXTURE(Fixture, "other_things_are_not_related_to_function")
 {
-    ScopedFastFlag sff{"LuauNegatedFunctionTypes", true};
     registerHiddenTypes(&frontend);
 
     CheckResult result = check(R"(
@@ -1849,6 +1896,96 @@ end
     )");
 
     LUAU_REQUIRE_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "dont_assert_when_the_tarjan_limit_is_exceeded_during_generalization")
+{
+    ScopedFastInt sfi{"LuauTarjanChildLimit", 2};
+    ScopedFastFlag sff[] = {
+        {"DebugLuauDeferredConstraintResolution", true},
+        {"LuauClonePublicInterfaceLess2", true},
+        {"LuauSubstitutionReentrant", true},
+        {"LuauSubstitutionFixMissingFields", true},
+    };
+
+    CheckResult result = check(R"(
+        function f(t)
+            t.x.y.z = 441
+        end
+    )");
+
+    LUAU_REQUIRE_ERROR_COUNT(2, result);
+
+    CHECK_MESSAGE(get<CodeTooComplex>(result.errors[0]), "Expected CodeTooComplex but got: " << toString(result.errors[0]));
+    CHECK(Location({1, 17}, {1, 18}) == result.errors[0].location);
+
+    CHECK_MESSAGE(get<UnificationTooComplex>(result.errors[1]), "Expected UnificationTooComplex but got: " << toString(result.errors[1]));
+    CHECK(Location({0, 0}, {4, 4}) == result.errors[1].location);
+}
+
+/* We had a bug under DCR where instantiated type packs had a nullptr scope.
+ *
+ * This caused an issue with promotion.
+ */
+TEST_CASE_FIXTURE(Fixture, "instantiated_type_packs_must_have_a_non_null_scope")
+{
+    CheckResult result = check(R"(
+        function pcall<A..., R...>(...: A...): R...
+        end
+
+        type Dispatch<A> = (A) -> ()
+
+        function mountReducer()
+            dispatchAction()
+            return nil :: any
+        end
+
+        function dispatchAction()
+        end
+
+        function useReducer(): Dispatch<any>
+            local result, setResult = pcall(mountReducer)
+            return setResult
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "inner_frees_become_generic_in_dcr")
+{
+    if (!FFlag::DebugLuauDeferredConstraintResolution)
+        return;
+
+    CheckResult result = check(R"(
+        function f(x)
+            local z = x
+            return x
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    std::optional<TypeId> ty = findTypeAtPosition(Position{3, 19});
+    REQUIRE(ty);
+    CHECK(get<GenericType>(*ty));
+}
+
+TEST_CASE_FIXTURE(Fixture, "function_exprs_are_generalized_at_signature_scope_not_enclosing")
+{
+    CheckResult result = check(R"(
+        local foo
+        local bar
+
+        -- foo being a function expression is deliberate: the bug we're testing
+        -- only existed for function expressions, not for function statements.
+        foo = function(a)
+            return bar
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+    // note that b is not in the generic list; it is free, the unconstrained type of `bar`.
+    CHECK(toString(requireType("foo")) == "<a>(a) -> b");
 }
 
 TEST_SUITE_END();

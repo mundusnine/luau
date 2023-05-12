@@ -58,13 +58,16 @@ struct Unifier
 
     NotNull<Scope> scope; // const Scope maybe
     TxnLog log;
+    bool failure = false;
     ErrorVec errors;
     Location location;
     Variance variance = Covariant;
     bool normalize = true;      // Normalize unions and intersections if necessary
     bool checkInhabited = true; // Normalize types to check if they are inhabited
-    bool useScopes = false;     // If true, we use the scope hierarchy rather than TypeLevels
     CountMismatch::Context ctx = CountMismatch::Arg;
+
+    // If true, generics act as free types when unifying.
+    bool hideousFixMeGenericsAreActuallyFree = false;
 
     UnifierSharedState& sharedState;
 
@@ -76,6 +79,10 @@ struct Unifier
 
     Unifier(
         NotNull<Normalizer> normalizer, Mode mode, NotNull<Scope> scope, const Location& location, Variance variance, TxnLog* parentLog = nullptr);
+
+    // Configure the Unifier to test for scope subsumption via embedded Scope
+    // pointers rather than TypeLevels.
+    void enableScopeTests();
 
     // Test whether the two type vars unify.  Never commits the result.
     ErrorVec canUnify(TypeId subTy, TypeId superTy);
@@ -90,6 +97,11 @@ struct Unifier
 private:
     void tryUnify_(TypeId subTy, TypeId superTy, bool isFunctionCall = false, bool isIntersection = false);
     void tryUnifyUnionWithType(TypeId subTy, const UnionType* uv, TypeId superTy);
+
+    // Traverse the two types provided and block on any BlockedTypes we find.
+    // Returns true if any types were blocked on.
+    bool DEPRECATED_blockOnBlockedTypes(TypeId subTy, TypeId superTy);
+
     void tryUnifyTypeWithUnion(TypeId subTy, TypeId superTy, const UnionType* uv, bool cacheEnabled, bool isFunctionCall);
     void tryUnifyTypeWithIntersection(TypeId subTy, TypeId superTy, const IntersectionType* uv);
     void tryUnifyIntersectionWithType(TypeId subTy, const IntersectionType* uv, TypeId superTy, bool cacheEnabled, bool isFunctionCall);
@@ -131,9 +143,9 @@ private:
 
 public:
     // Returns true if the type "needle" already occurs within "haystack" and reports an "infinite type error"
-    bool occursCheck(TypeId needle, TypeId haystack);
+    bool occursCheck(TypeId needle, TypeId haystack, bool reversed);
     bool occursCheck(DenseHashSet<TypeId>& seen, TypeId needle, TypeId haystack);
-    bool occursCheck(TypePackId needle, TypePackId haystack);
+    bool occursCheck(TypePackId needle, TypePackId haystack, bool reversed);
     bool occursCheck(DenseHashSet<TypePackId>& seen, TypePackId needle, TypePackId haystack);
 
     Unifier makeChildUnifier();
@@ -153,9 +165,13 @@ private:
 
     // Available after regular type pack unification errors
     std::optional<int> firstPackErrorPos;
+
+    // If true, we use the scope hierarchy rather than TypeLevels
+    bool useScopes = false;
 };
 
 void promoteTypeLevels(TxnLog& log, const TypeArena* arena, TypeLevel minLevel, Scope* outerScope, bool useScope, TypePackId tp);
 std::optional<TypeError> hasUnificationTooComplex(const ErrorVec& errors);
+std::optional<TypeError> hasCountMismatch(const ErrorVec& errors);
 
 } // namespace Luau

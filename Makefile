@@ -55,7 +55,7 @@ ifneq ($(opt),)
 	TESTS_ARGS+=-O$(opt)
 endif
 
-OBJECTS=$(AST_OBJECTS) $(COMPILER_OBJECTS) $(ANALYSIS_OBJECTS) $(CODEGEN_OBJECTS) $(VM_OBJECTS) $(ISOCLINE_OBJECTS) $(TESTS_OBJECTS) $(CLI_OBJECTS) $(FUZZ_OBJECTS)
+OBJECTS=$(AST_OBJECTS) $(COMPILER_OBJECTS) $(ANALYSIS_OBJECTS) $(CODEGEN_OBJECTS) $(VM_OBJECTS) $(ISOCLINE_OBJECTS) $(TESTS_OBJECTS) $(REPL_CLI_OBJECTS) $(ANALYZE_CLI_OBJECTS) $(FUZZ_OBJECTS)
 EXECUTABLE_ALIASES = luau luau-analyze luau-tests
 
 # common flags
@@ -117,6 +117,11 @@ ifneq ($(native),)
 	TESTS_ARGS+=--codegen
 endif
 
+ifneq ($(nativelj),)
+	CXXFLAGS+=-DLUA_CUSTOM_EXECUTION=1 -DLUA_USE_LONGJMP=1
+	TESTS_ARGS+=--codegen
+endif
+
 # target-specific flags
 $(AST_OBJECTS): CXXFLAGS+=-std=c++17 -ICommon/include -IAst/include
 $(COMPILER_OBJECTS): CXXFLAGS+=-std=c++17 -ICompiler/include -ICommon/include -IAst/include
@@ -142,6 +147,9 @@ aliases: $(EXECUTABLE_ALIASES)
 
 test: $(TESTS_TARGET)
 	$(TESTS_TARGET) $(TESTS_ARGS)
+
+conformance: $(TESTS_TARGET)
+	$(TESTS_TARGET) $(TESTS_ARGS) -ts=Conformance
 
 clean:
 	rm -rf $(BUILD)

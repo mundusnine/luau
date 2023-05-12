@@ -22,8 +22,8 @@ TEST_CASE_FIXTURE(Fixture, "select_correct_union_fn")
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
-    CHECK_EQ(requireType("b"), typeChecker.stringType);
-    CHECK_EQ(requireType("c"), typeChecker.numberType);
+    CHECK_EQ(requireType("b"), builtinTypes->stringType);
+    CHECK_EQ(requireType("c"), builtinTypes->numberType);
 }
 
 TEST_CASE_FIXTURE(Fixture, "table_combines")
@@ -123,11 +123,11 @@ TEST_CASE_FIXTURE(Fixture, "should_still_pick_an_overload_whose_arguments_are_un
 
     LUAU_REQUIRE_NO_ERRORS(result);
 
-    CHECK_EQ(*requireType("a1"), *typeChecker.numberType);
-    CHECK_EQ(*requireType("a2"), *typeChecker.numberType);
+    CHECK_EQ(*requireType("a1"), *builtinTypes->numberType);
+    CHECK_EQ(*requireType("a2"), *builtinTypes->numberType);
 
-    CHECK_EQ(*requireType("b1"), *typeChecker.stringType);
-    CHECK_EQ(*requireType("b2"), *typeChecker.stringType);
+    CHECK_EQ(*requireType("b1"), *builtinTypes->stringType);
+    CHECK_EQ(*requireType("b2"), *builtinTypes->stringType);
 }
 
 TEST_CASE_FIXTURE(Fixture, "propagates_name")
@@ -249,7 +249,7 @@ TEST_CASE_FIXTURE(Fixture, "index_on_an_intersection_type_with_one_property_of_t
     )");
 
     LUAU_REQUIRE_NO_ERRORS(result);
-    CHECK_EQ(*typeChecker.anyType, *requireType("r"));
+    CHECK_EQ(*builtinTypes->anyType, *requireType("r"));
 }
 
 TEST_CASE_FIXTURE(Fixture, "index_on_an_intersection_type_with_all_parts_missing_the_property")
@@ -327,7 +327,12 @@ TEST_CASE_FIXTURE(Fixture, "table_intersection_write_sealed")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(1, result);
-    CHECK_EQ(toString(result.errors[0]), "Cannot add property 'z' to table 'X & Y'");
+    auto e = toString(result.errors[0]);
+    // In DCR, because of type normalization, we print a different error message
+    if (FFlag::DebugLuauDeferredConstraintResolution)
+        CHECK_EQ("Cannot add property 'z' to table '{| x: number, y: number |}'", e);
+    else
+        CHECK_EQ("Cannot add property 'z' to table 'X & Y'", e);
 }
 
 TEST_CASE_FIXTURE(Fixture, "table_intersection_write_sealed_indirect")
@@ -545,6 +550,8 @@ TEST_CASE_FIXTURE(Fixture, "intersection_of_tables")
 
 TEST_CASE_FIXTURE(Fixture, "intersection_of_tables_with_top_properties")
 {
+    ScopedFastFlag sff{"LuauUnifyTwoOptions", true};
+
     CheckResult result = check(R"(
         local x : { p : number?, q : any } & { p : unknown, q : string? }
         local y : { p : number?, q : string? } = x -- OK
@@ -558,27 +565,19 @@ TEST_CASE_FIXTURE(Fixture, "intersection_of_tables_with_top_properties")
         CHECK_EQ(toString(result.errors[0]),
             "Type '{| p: number?, q: string? |}' could not be converted into '{| p: string?, q: number? |}'\n"
             "caused by:\n"
-            "  Property 'p' is not compatible. Type 'number?' could not be converted into 'string?'\n"
-            "caused by:\n"
-            "  Not all union options are compatible. Type 'number' could not be converted into 'string?'\n"
-            "caused by:\n"
-            "  None of the union options are compatible. For example: Type 'number' could not be converted into 'string' in an invariant context");
+            "  Property 'p' is not compatible. Type 'number' could not be converted into 'string' in an invariant context");
 
         CHECK_EQ(toString(result.errors[1]),
             "Type '{| p: number?, q: string? |}' could not be converted into '{| p: string?, q: number? |}'\n"
             "caused by:\n"
-            "  Property 'q' is not compatible. Type 'string?' could not be converted into 'number?'\n"
-            "caused by:\n"
-            "  Not all union options are compatible. Type 'string' could not be converted into 'number?'\n"
-            "caused by:\n"
-            "  None of the union options are compatible. For example: Type 'string' could not be converted into 'number' in an invariant context");
+            "  Property 'q' is not compatible. Type 'string' could not be converted into 'number' in an invariant context");
     }
     else
     {
         LUAU_REQUIRE_ERROR_COUNT(1, result);
         CHECK_EQ(toString(result.errors[0]),
-            "Type '{| p: number?, q: any |} & {| p: unknown, q: string? |}' could not be converted into '{| p: string?, "
-            "q: number? |}'; none of the intersection parts are compatible");
+            "Type '{| p: number?, q: any |} & {| p: unknown, q: string? |}' could not be converted into "
+            "'{| p: string?, q: number? |}'; none of the intersection parts are compatible");
     }
 }
 

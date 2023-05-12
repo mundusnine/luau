@@ -65,8 +65,10 @@ target_sources(Luau.CodeGen PRIVATE
     CodeGen/include/Luau/ConditionX64.h
     CodeGen/include/Luau/IrAnalysis.h
     CodeGen/include/Luau/IrBuilder.h
+    CodeGen/include/Luau/IrCallWrapperX64.h
     CodeGen/include/Luau/IrDump.h
     CodeGen/include/Luau/IrData.h
+    CodeGen/include/Luau/IrRegAllocX64.h
     CodeGen/include/Luau/IrUtils.h
     CodeGen/include/Luau/Label.h
     CodeGen/include/Luau/OperandX64.h
@@ -84,6 +86,7 @@ target_sources(Luau.CodeGen PRIVATE
     CodeGen/src/CodeBlockUnwind.cpp
     CodeGen/src/CodeGen.cpp
     CodeGen/src/CodeGenUtils.cpp
+    CodeGen/src/CodeGenA64.cpp
     CodeGen/src/CodeGenX64.cpp
     CodeGen/src/EmitBuiltinsX64.cpp
     CodeGen/src/EmitCommonX64.cpp
@@ -91,32 +94,41 @@ target_sources(Luau.CodeGen PRIVATE
     CodeGen/src/Fallbacks.cpp
     CodeGen/src/IrAnalysis.cpp
     CodeGen/src/IrBuilder.cpp
+    CodeGen/src/IrCallWrapperX64.cpp
     CodeGen/src/IrDump.cpp
+    CodeGen/src/IrLoweringA64.cpp
     CodeGen/src/IrLoweringX64.cpp
+    CodeGen/src/IrRegAllocA64.cpp
     CodeGen/src/IrRegAllocX64.cpp
     CodeGen/src/IrTranslateBuiltins.cpp
     CodeGen/src/IrTranslation.cpp
     CodeGen/src/IrUtils.cpp
+    CodeGen/src/IrValueLocationTracking.cpp
     CodeGen/src/NativeState.cpp
     CodeGen/src/OptimizeConstProp.cpp
     CodeGen/src/OptimizeFinalX64.cpp
     CodeGen/src/UnwindBuilderDwarf2.cpp
     CodeGen/src/UnwindBuilderWin.cpp
 
+    CodeGen/src/BitUtils.h
     CodeGen/src/ByteUtils.h
     CodeGen/src/CustomExecUtils.h
     CodeGen/src/CodeGenUtils.h
+    CodeGen/src/CodeGenA64.h
     CodeGen/src/CodeGenX64.h
     CodeGen/src/EmitBuiltinsX64.h
     CodeGen/src/EmitCommon.h
+    CodeGen/src/EmitCommonA64.h
     CodeGen/src/EmitCommonX64.h
     CodeGen/src/EmitInstructionX64.h
     CodeGen/src/Fallbacks.h
     CodeGen/src/FallbacksProlog.h
+    CodeGen/src/IrLoweringA64.h
     CodeGen/src/IrLoweringX64.h
-    CodeGen/src/IrRegAllocX64.h
+    CodeGen/src/IrRegAllocA64.h
     CodeGen/src/IrTranslateBuiltins.h
     CodeGen/src/IrTranslation.h
+    CodeGen/src/IrValueLocationTracking.h
     CodeGen/src/NativeState.h
 )
 
@@ -135,6 +147,7 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/include/Luau/Constraint.h
     Analysis/include/Luau/ConstraintGraphBuilder.h
     Analysis/include/Luau/ConstraintSolver.h
+    Analysis/include/Luau/ControlFlow.h
     Analysis/include/Luau/DataFlowGraph.h
     Analysis/include/Luau/DcrLogger.h
     Analysis/include/Luau/Def.h
@@ -167,6 +180,7 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/include/Luau/TypeAttach.h
     Analysis/include/Luau/TypeChecker2.h
     Analysis/include/Luau/TypedAllocator.h
+    Analysis/include/Luau/TypeFamily.h
     Analysis/include/Luau/TypeInfer.h
     Analysis/include/Luau/TypePack.h
     Analysis/include/Luau/TypeReduction.h
@@ -217,6 +231,7 @@ target_sources(Luau.Analysis PRIVATE
     Analysis/src/TypeAttach.cpp
     Analysis/src/TypeChecker2.cpp
     Analysis/src/TypedAllocator.cpp
+    Analysis/src/TypeFamily.cpp
     Analysis/src/TypeInfer.cpp
     Analysis/src/TypePack.cpp
     Analysis/src/TypeReduction.cpp
@@ -333,6 +348,7 @@ if(TARGET Luau.UnitTest)
         tests/Fixture.h
         tests/IostreamOptional.h
         tests/ScopedFlags.h
+        tests/AssemblyBuilderA64.test.cpp
         tests/AssemblyBuilderX64.test.cpp
         tests/AstJsonEncoder.test.cpp
         tests/AstQuery.test.cpp
@@ -349,6 +365,8 @@ if(TARGET Luau.UnitTest)
         tests/Error.test.cpp
         tests/Frontend.test.cpp
         tests/IrBuilder.test.cpp
+        tests/IrCallWrapperX64.test.cpp
+        tests/IrRegAllocX64.test.cpp
         tests/JsonEmitter.test.cpp
         tests/Lexer.test.cpp
         tests/Linter.test.cpp
@@ -366,10 +384,13 @@ if(TARGET Luau.UnitTest)
         tests/TopoSort.test.cpp
         tests/ToString.test.cpp
         tests/Transpiler.test.cpp
+        tests/TxnLog.test.cpp
+        tests/TypeFamily.test.cpp
         tests/TypeInfer.aliases.test.cpp
         tests/TypeInfer.annotations.test.cpp
         tests/TypeInfer.anyerror.test.cpp
         tests/TypeInfer.builtins.test.cpp
+        tests/TypeInfer.cfa.test.cpp
         tests/TypeInfer.classes.test.cpp
         tests/TypeInfer.definitions.test.cpp
         tests/TypeInfer.functions.test.cpp

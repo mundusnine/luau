@@ -8,7 +8,6 @@
 #include "doctest.h"
 
 LUAU_FASTFLAG(DebugLuauDeferredConstraintResolution)
-LUAU_FASTFLAG(LuauNegatedClassTypes)
 
 using namespace Luau;
 
@@ -30,9 +29,8 @@ std::optional<WithPredicate<TypePackId>> magicFunctionInstanceIsA(
     if (!lvalue || !tfun)
         return std::nullopt;
 
-    unfreeze(typeChecker.globalTypes);
-    TypePackId booleanPack = typeChecker.globalTypes.addTypePack({typeChecker.booleanType});
-    freeze(typeChecker.globalTypes);
+    ModulePtr module = typeChecker.currentModule;
+    TypePackId booleanPack = module->internalTypes.addTypePack({typeChecker.booleanType});
     return WithPredicate<TypePackId>{booleanPack, {IsAPredicate{std::move(*lvalue), expr.location, tfun->type}}};
 }
 
@@ -62,47 +60,47 @@ struct RefinementClassFixture : BuiltinsFixture
 {
     RefinementClassFixture()
     {
-        TypeArena& arena = typeChecker.globalTypes;
-        NotNull<Scope> scope{typeChecker.globalScope.get()};
+        TypeArena& arena = frontend.globals.globalTypes;
+        NotNull<Scope> scope{frontend.globals.globalScope.get()};
 
-        std::optional<TypeId> rootSuper = FFlag::LuauNegatedClassTypes ? std::make_optional(typeChecker.builtinTypes->classType) : std::nullopt;
+        std::optional<TypeId> rootSuper = std::make_optional(builtinTypes->classType);
 
         unfreeze(arena);
         TypeId vec3 = arena.addType(ClassType{"Vector3", {}, rootSuper, std::nullopt, {}, nullptr, "Test"});
         getMutable<ClassType>(vec3)->props = {
-            {"X", Property{typeChecker.numberType}},
-            {"Y", Property{typeChecker.numberType}},
-            {"Z", Property{typeChecker.numberType}},
+            {"X", Property{builtinTypes->numberType}},
+            {"Y", Property{builtinTypes->numberType}},
+            {"Z", Property{builtinTypes->numberType}},
         };
 
         TypeId inst = arena.addType(ClassType{"Instance", {}, rootSuper, std::nullopt, {}, nullptr, "Test"});
 
-        TypePackId isAParams = arena.addTypePack({inst, typeChecker.stringType});
-        TypePackId isARets = arena.addTypePack({typeChecker.booleanType});
+        TypePackId isAParams = arena.addTypePack({inst, builtinTypes->stringType});
+        TypePackId isARets = arena.addTypePack({builtinTypes->booleanType});
         TypeId isA = arena.addType(FunctionType{isAParams, isARets});
         getMutable<FunctionType>(isA)->magicFunction = magicFunctionInstanceIsA;
         getMutable<FunctionType>(isA)->dcrMagicRefinement = dcrMagicRefinementInstanceIsA;
 
         getMutable<ClassType>(inst)->props = {
-            {"Name", Property{typeChecker.stringType}},
+            {"Name", Property{builtinTypes->stringType}},
             {"IsA", Property{isA}},
         };
 
-        TypeId folder = typeChecker.globalTypes.addType(ClassType{"Folder", {}, inst, std::nullopt, {}, nullptr, "Test"});
-        TypeId part = typeChecker.globalTypes.addType(ClassType{"Part", {}, inst, std::nullopt, {}, nullptr, "Test"});
+        TypeId folder = frontend.globals.globalTypes.addType(ClassType{"Folder", {}, inst, std::nullopt, {}, nullptr, "Test"});
+        TypeId part = frontend.globals.globalTypes.addType(ClassType{"Part", {}, inst, std::nullopt, {}, nullptr, "Test"});
         getMutable<ClassType>(part)->props = {
             {"Position", Property{vec3}},
         };
 
-        typeChecker.globalScope->exportedTypeBindings["Vector3"] = TypeFun{{}, vec3};
-        typeChecker.globalScope->exportedTypeBindings["Instance"] = TypeFun{{}, inst};
-        typeChecker.globalScope->exportedTypeBindings["Folder"] = TypeFun{{}, folder};
-        typeChecker.globalScope->exportedTypeBindings["Part"] = TypeFun{{}, part};
+        frontend.globals.globalScope->exportedTypeBindings["Vector3"] = TypeFun{{}, vec3};
+        frontend.globals.globalScope->exportedTypeBindings["Instance"] = TypeFun{{}, inst};
+        frontend.globals.globalScope->exportedTypeBindings["Folder"] = TypeFun{{}, folder};
+        frontend.globals.globalScope->exportedTypeBindings["Part"] = TypeFun{{}, part};
 
-        for (const auto& [name, ty] : typeChecker.globalScope->exportedTypeBindings)
+        for (const auto& [name, ty] : frontend.globals.globalScope->exportedTypeBindings)
             persist(ty.type);
 
-        freeze(typeChecker.globalTypes);
+        freeze(frontend.globals.globalTypes);
     }
 };
 } // namespace
@@ -1616,7 +1614,8 @@ TEST_CASE_FIXTURE(Fixture, "refine_a_property_of_some_global")
     )");
 
     LUAU_REQUIRE_ERROR_COUNT(3, result);
-    CHECK_EQ("*error-type*", toString(requireTypeAtPosition({4, 30})));
+
+    CHECK_EQ("~false & ~nil", toString(requireTypeAtPosition({4, 30})));
 }
 
 TEST_CASE_FIXTURE(BuiltinsFixture, "dataflow_analysis_can_tell_refinements_when_its_appropriate_to_refine_into_nil_or_never")
@@ -1747,6 +1746,38 @@ TEST_CASE_FIXTURE(BuiltinsFixture, "type_annotations_arent_relevant_when_doing_d
         CHECK_EQ("never", toString(requireTypeAtPosition({9, 28})));
     else
         CHECK_EQ("nil", toString(requireTypeAtPosition({9, 28})));
+}
+
+TEST_CASE_FIXTURE(BuiltinsFixture, "function_call_with_colon_after_refining_not_to_be_nil")
+{
+    ScopedFastFlag sff{"DebugLuauDeferredConstraintResolution", true};
+
+    CheckResult result = check(R"(
+        --!strict
+        export type Observer<T> = {
+            complete: ((self: Observer<T>) -> ())?,
+        }
+
+        local function _f(handler: Observer<any>)
+            assert(handler.complete ~= nil)
+            handler:complete() -- incorrectly gives Value of type '((Observer<any>) -> ())?' could be nil
+            handler.complete(handler) -- works fine, both forms should avoid the error
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
+}
+
+TEST_CASE_FIXTURE(Fixture, "refinements_should_not_affect_assignment")
+{
+    CheckResult result = check(R"(
+        local a: unknown = true
+        if a == true then
+            a = 'not even remotely similar to a boolean'
+        end
+    )");
+
+    LUAU_REQUIRE_NO_ERRORS(result);
 }
 
 TEST_SUITE_END();
